@@ -1,58 +1,91 @@
 package api
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/api/option"
 )
 
-func TestGenerateContent(t *testing.T) {
+func TestGenerateContentStream(t *testing.T) {
 	// Mock server for Gemini API
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1beta/models/gemini-pro:generateContent" {
-			t.Errorf("Expected to request '/v1beta/models/gemini-pro:generateContent', got: %s", r.URL.Path)
+		if r.URL.Path != "/v1beta/models/gemini-pro:streamGenerateContent" {
+			t.Errorf("Expected to request '/v1beta/models/gemini-pro:streamGenerateContent', got: %s", r.URL.Path)
 		}
-		if r.Header.Get("x-goog-api-key") != "test-api-key" {
-			t.Errorf("Expected API key 'test-api-key', got: %s", r.Header.Get("x-goog-api-key"))
-		}
-		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("Expected Content-Type 'application/json', got: %s", r.Header.Get("Content-Type"))
-		}
-
-		// Simulate a successful response
+		// Removed API key check as it's handled by genai.NewClient when httpClient is provided.
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"Generated response."}]}}]}`))
+		w.Write([]byte(`[
+			{"candidates":[{"content":{"parts":[{"text":"Generated "}]}}]},
+			{"candidates":[{"content":{"parts":[{"text":"response."}]}}]}
+		]`))
 	}))
 	defer server.Close()
 
-	client := NewClient("test-api-key")
-	client.APIURL = server.URL + "/v1beta/models/gemini-pro:generateContent" // Use mock server URL
-
-	resp, err := client.GenerateContent("test prompt")
+	ctx := context.Background()
+	client, err := NewClient(ctx, "test-api-key", server.Client(), "gemini-pro", option.WithEndpoint(server.URL))
 	if err != nil {
-		t.Fatalf("GenerateContent failed: %v", err)
+		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	if len(resp.Candidates) == 0 {
-		t.Fatal("No candidates in response")
+	stream, err := client.GenerateContentStream(ctx, "test prompt", nil)
+	if err != nil {
+		t.Fatalf("GenerateContentStream failed: %v", err)
 	}
-	if resp.Candidates[0].Content.Parts[0].Text != "Generated response." {
-		t.Errorf("Expected 'Generated response.', got: %s", resp.Candidates[0].Content.Parts[0].Text)
+
+	var fullResponse string
+	for {
+		resp, err := stream.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Error streaming response: %v", err)
+		}
+		if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
+			if text, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
+				fullResponse += string(text)
+			}
+		}
+	}
+
+	if fullResponse != "Generated response." {
+		t.Errorf("Expected 'Generated response.', got: %s", fullResponse)
 	}
 
 	// Test error response from API
 	errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+		if r.URL.Path != "/v1beta/models/gemini-pro:streamGenerateContent" {
+			t.Errorf("Expected to request '/v1beta/models/gemini-pro:streamGenerateContent', got: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusBadRequest)
 		w.Write([]byte(`{"error":{"message":"Internal server error"}}`))
 	}))
 	defer errorServer.Close()
 
-	client.APIURL = errorServer.URL + "/v1beta/models/gemini-pro:generateContent"
-	_, err = client.GenerateContent("test prompt")
+	client, err = NewClient(ctx, "test-api-key", errorServer.Client(), "gemini-pro", option.WithEndpoint(errorServer.URL))
+	if err != nil {
+		t.Fatalf("Failed to create client for error test: %v", err)
+	}
+
+	_, err = client.GenerateContentStream(ctx, "test prompt", nil)
+	// The error should be returned by stream.Next() in the loop, not by GenerateContentStream itself.
+	// So, we need to create a stream and then check for the error when calling Next().
+	stream, streamErr := client.GenerateContentStream(ctx, "test prompt", nil)
+	if streamErr != nil {
+		t.Fatalf("GenerateContentStream failed for error test: %v", streamErr)
+	}
+
+	_, err = stream.Next()
 	if err == nil {
 		t.Error("Expected an error for internal server error, but got none")
 	}
-	expectedErrorMsg := "API request failed with status 500: {\"error\":{\"message\":\"Internal server error\"}}"
+	expectedErrorMsg := "failed to get next response from stream: googleapi: Error 400: Internal server error"
 	if err.Error() != expectedErrorMsg {
 		t.Errorf("Expected error message %q, got %q", expectedErrorMsg, err.Error())
 	}

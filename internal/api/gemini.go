@@ -1,114 +1,163 @@
 package api
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+
+	"gemini-cli-go/internal/config"
+	"gemini-cli-go/internal/shared"
+
+	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 )
-
-const (
-	defaultAPIURL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
-)
-
-// GenerateContentRequest represents the request body for the generateContent API.
-type GenerateContentRequest struct {
-	Contents []Content `json:"contents"`
-}
-
-// Content represents a single content part in the request.
-type Content struct {
-	Parts []Part `json:"parts"`
-}
-
-// Part represents a single part of the content, e.g., text.
-type Part struct {
-	Text string `json:"text"`
-}
-
-// GenerateContentResponse represents the response body from the generateContent API.
-type GenerateContentResponse struct {
-	Candidates []Candidate `json:"candidates"`
-}
-
-// Candidate represents a generated content candidate.
-type Candidate struct {
-	Content Content `json:"content"`
-}
 
 // Client is a client for the Gemini API.
 type Client struct {
-	HTTPClient *http.Client // Use a generic HTTP client
-	APIKey     string       // Still keep APIKey for fallback or direct use
-	APIURL     string
+	model *genai.GenerativeModel
 }
 
 // NewClient creates a new Gemini API client.
 // It can be initialized with an existing http.Client (e.g., for OAuth2) or an API key.
-func NewClient(apiKey string, httpClient *http.Client) *Client {
-	if httpClient == nil {
-		httpClient = &http.Client{}
+// The modelName specifies which Gemini model to use (e.g., "gemini-pro", "gemini-2.5-pro").
+func NewClient(ctx context.Context, apiKey string, httpClient *http.Client, modelName string, opts ...option.ClientOption) (*Client, error) {
+	var clientOpts []option.ClientOption
+	if httpClient != nil {
+		clientOpts = append(clientOpts, option.WithHTTPClient(httpClient), option.WithoutAuthentication())
+	} else if apiKey != "" {
+		clientOpts = append(clientOpts, option.WithAPIKey(apiKey))
+	} else {
+		return nil, fmt.Errorf("either httpClient or apiKey must be provided")
 	}
-	return &Client{
-		HTTPClient: httpClient,
-		APIKey:     apiKey,
-		APIURL:     defaultAPIURL,
+
+	clientOpts = append(clientOpts, opts...)
+
+	genaiClient, err := genai.NewClient(ctx, clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create genai client: %w", err)
 	}
+
+	model := genaiClient.GenerativeModel(modelName)
+	return &Client{model: model}, nil
 }
 
-// GenerateContent sends a request to the Gemini API to generate content.
-func (c *Client) GenerateContent(prompt string) (*GenerateContentResponse, error) {
-	reqBody := GenerateContentRequest{
-		Contents: []Content{
-			{
-				Parts: []Part{
-					{Text: prompt},
+// GenerateContentStream sends a request to the Gemini API to generate content and streams the response.
+func (c *Client) GenerateContentStream(ctx context.Context, prompt string, tools *shared.Tools) (*ResponseStream, error) {
+	var genaiTools []*genai.Tool
+
+	if tools != nil && len(tools.FunctionDeclarations) > 0 {
+		genaiTools = make([]*genai.Tool, len(tools.FunctionDeclarations))
+		for i, fd := range tools.FunctionDeclarations {
+			// Convert map[string]interface{} to *genai.Schema
+			paramsJSON, err := json.Marshal(fd.Parameters)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal parameters: %w", err)
+			}
+			var schema genai.Schema
+			if err := json.Unmarshal(paramsJSON, &schema); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal parameters to schema: %w", err)
+			}
+
+			genaiTools[i] = &genai.Tool{
+				FunctionDeclarations: []*genai.FunctionDeclaration{
+					{
+						Name:        fd.Name,
+						Description: fd.Description,
+						Parameters:  &schema,
+					},
 				},
-			},
-		},
+			}
+		}
+		// Set tools on the model
+		c.model.Tools = genaiTools
 	}
 
-	jsonBody, err := json.Marshal(reqBody)
+	iter := c.model.GenerateContentStream(ctx, genai.Text(prompt))
+	return &ResponseStream{iter: iter}, nil
+}
+
+// ResponseStream wraps the genai.GenerateContentResponseIterator.
+type ResponseStream struct {
+	iter *genai.GenerateContentResponseIterator
+}
+
+// Next returns the next part of the streamed response.
+func (rs *ResponseStream) Next() (*genai.GenerateContentResponse, error) {
+	resp, err := rs.iter.Next()
+	if err == iterator.Done {
+		return nil, io.EOF
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		return nil, fmt.Errorf("failed to get next response from stream: %w", err)
 	}
+	return resp, nil
+}
 
-	req, err := http.NewRequest("POST", c.APIURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+// RunNonInteractive handles the non-interactive CLI interaction with Gemini.
+func RunNonInteractive(ctx context.Context, cfg *config.CliConfig, client *Client, toolRegistry shared.ToolRegistryInterface, initialPrompt string) error {
+	currentPrompt := initialPrompt
+	for {
+		fmt.Printf("Sending prompt to Gemini: \"%s\"\n", currentPrompt)
+		stream, err := client.GenerateContentStream(ctx, currentPrompt, &shared.Tools{FunctionDeclarations: toolRegistry.GetFunctionDeclarations()})
+		if err != nil {
+			return fmt.Errorf("error generating content: %w", err)
+		}
+
+		var fullTextResponse string
+		var functionCalls []shared.FunctionCall
+
+		for {
+			resp, err := stream.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("error streaming response: %w", err)
+			}
+
+			if len(resp.Candidates) == 0 {
+				continue
+			}
+
+			candidate := resp.Candidates[0]
+			for _, part := range candidate.Content.Parts {
+				if text, ok := part.(genai.Text); ok {
+					fmt.Print(string(text))
+					fullTextResponse += string(text)
+				} else if functionCall, ok := part.(genai.FunctionCall); ok {
+					functionCalls = append(functionCalls, shared.FunctionCall{
+						Name: functionCall.Name,
+						Args: functionCall.Args,
+					})
+				}
+			}
+		}
+
+		fmt.Println() // Newline after streamed response
+
+		if len(functionCalls) > 0 {
+			fc := functionCalls[0] // Simplified: assuming one function call at a time
+			fmt.Printf("\nGemini called tool: %s with args: %v\n", fc.Name, fc.Args)
+
+			calledTool, ok := toolRegistry.GetTool(fc.Name)
+			if !ok {
+				return fmt.Errorf("tool %s not found", fc.Name)
+			}
+
+			toolOutput, err := calledTool.Execute(ctx, fc.Args)
+			if err != nil {
+				return fmt.Errorf("error executing tool %s: %w", fc.Name, err)
+			}
+
+			fmt.Printf("Tool %s output:\n%s\n", fc.Name, toolOutput)
+			currentPrompt = fmt.Sprintf("Tool %s returned: %s", fc.Name, toolOutput) // Feed tool output back to Gemini
+		} else if fullTextResponse != "" {
+			return nil // Gemini responded with text, end interaction
+		} else {
+			return fmt.Errorf("no text or function call in Gemini's response")
+		}
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	// Only set API key header if HTTPClient is not already configured for OAuth2
-	// (i.e., if APIKey is provided and HTTPClient is the default one)
-	if c.APIKey != "" && c.HTTPClient == http.DefaultClient { // Simplified check, might need refinement
-		req.Header.Set("x-goog-api-key", c.APIKey)
-	} else if c.APIKey != "" { // If APIKey is set, but HTTPClient is custom, assume it's for OAuth2
-		// Do nothing, OAuth2 client will handle auth
-	}
-
-
-	resp, err := c.HTTPClient.Do(req) // Use the injected HTTPClient
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	var genResp GenerateContentResponse
-	if err := json.Unmarshal(respBody, &genResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response body: %w", err)
-	}
-
-	return &genResp, nil
 }

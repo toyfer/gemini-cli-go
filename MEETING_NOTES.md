@@ -238,3 +238,20 @@
 ### アクションアイテム
 *   Gemini: `gemini-cli-go` プロジェクトをビルドし、OAuth2認証で `chat` コマンドと `generate-code` コマンドの動作確認を行う。
 *   Gemini: `DESIGN.md` を更新し、APIクライアントへのOAuth2統合に関する詳細を追記する。
+
+## 2025年6月27日 - `write-file` コマンドの実装
+
+### 参加者
+*   [あなたの名前/役割]
+*   Gemini (AIエージェント)
+
+### 議題
+1.  `write-file` コマンドの実装
+
+### 決定事項
+*   `internal/filesystem` パッケージに `WriteFile` 関数を実装した。
+*   `cmd/gemini/main.go` に `write-file` コマンドを追加し、指定されたファイルにコンテンツを書き込む機能を追加した。
+
+### アクションアイテム
+*   Gemini: `gemini-cli-go` プロジェクトをビルドし、`write-file` コマンドの動作確認を行う。
+*   Gemini: `DESIGN.md` を更新し、`write-file` コマンドに関する詳細を追記する。
