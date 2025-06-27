@@ -20,3 +20,14 @@ func ReadFile(filePath string) ([]byte, error) {
 
 	return content, nil
 }
+
+// WriteFile writes content to a file at the given path.
+// If the file does not exist, it will be created. If it exists, its content will be truncated.
+func WriteFile(filePath string, content []byte) error {
+	err := ioutil.WriteFile(filePath, content, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write file %s: %w", filePath, err)
+	}
+
+	return nil
+}
