@@ -1,7 +1,6 @@
 package filesystem
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,7 +9,7 @@ import (
 
 func TestWalkDir(t *testing.T) {
 	// Create a temporary directory structure for testing
-	tmpDir, err := ioutil.TempDir("", "testdir")
+	tmpDir, err := os.MkdirTemp("", "testdir")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +29,7 @@ func TestWalkDir(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 			t.Fatal(err)
 		}
-		if err := ioutil.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}

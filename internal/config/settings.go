@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,7 +250,7 @@ func LoadSettings(workspaceDir string) LoadedSettings {
 
 	// Load user settings
 	if _, err := os.Stat(userSettingsPath); err == nil {
-		content, err := ioutil.ReadFile(userSettingsPath)
+		content, err := os.ReadFile(userSettingsPath)
 		if err != nil {
 			settingsErrors = append(settingsErrors, errors.SettingError{
 				Message: fmt.Sprintf("Failed to read user settings file: %v", err),
@@ -296,7 +295,7 @@ func LoadSettings(workspaceDir string) LoadedSettings {
 
 	// Load workspace settings
 	if _, err := os.Stat(workspaceSettingsPath); err == nil {
-		content, err := ioutil.ReadFile(workspaceSettingsPath)
+		content, err := os.ReadFile(workspaceSettingsPath)
 		if err != nil {
 			settingsErrors = append(settingsErrors, errors.SettingError{
 				Message: fmt.Sprintf("Failed to read workspace settings file: %v", err),
@@ -358,7 +357,7 @@ func SaveSettings(settingsFile SettingsFile) error {
 		return fmt.Errorf("failed to marshal settings to JSON: %w", err)
 	}
 
-	if err := ioutil.WriteFile(settingsFile.Path, data, 0644); err != nil {
+	if err := os.WriteFile(settingsFile.Path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write settings file %s: %w", settingsFile.Path, err)
 	}
 	return nil
