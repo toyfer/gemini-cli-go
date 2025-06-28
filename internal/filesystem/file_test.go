@@ -2,14 +2,13 @@ package filesystem
 
 import (
 	"errors"
-	"io/ioutil"
 	"os"
 	"testing"
 )
 
 func TestReadFile(t *testing.T) {
 	// Create a temporary file for testing
-	tmpfile, err := ioutil.TempFile("", "testfile")
+	tmpfile, err := os.CreateTemp("", "testfile")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +43,7 @@ func TestReadFile(t *testing.T) {
 
 func TestWriteFile(t *testing.T) {
 	// Test case 1: Write to new file
-	tmpfile, err := ioutil.TempFile("", "testwritefile")
+	tmpfile, err := os.CreateTemp("", "testwritefile")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +57,7 @@ func TestWriteFile(t *testing.T) {
 	}
 
 	// Verify the content was written correctly
-	readContent, err := ioutil.ReadFile(tmpfile.Name())
+	readContent, err := os.ReadFile(tmpfile.Name())
 	if err != nil {
 		t.Fatalf("Failed to read back written file: %v", err)
 	}
@@ -74,7 +73,7 @@ func TestWriteFile(t *testing.T) {
 	}
 
 	// Verify the content was overwritten
-	readContent, err = ioutil.ReadFile(tmpfile.Name())
+	readContent, err = os.ReadFile(tmpfile.Name())
 	if err != nil {
 		t.Fatalf("Failed to read back overwritten file: %v", err)
 	}

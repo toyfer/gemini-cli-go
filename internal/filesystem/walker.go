@@ -2,7 +2,6 @@ package filesystem
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,7 +41,7 @@ func WalkDir(root string, extensions []string) ([]FileContent, error) {
 			}
 		}
 
-		content, err := ioutil.ReadFile(path)
+		content, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("failed to read file %s: %w", path, err)
 		}

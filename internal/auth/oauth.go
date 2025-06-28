@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -73,7 +72,7 @@ func SaveToken(token *oauth2.Token) error {
 		return fmt.Errorf("failed to marshal token: %w", err)
 	}
 
-	if err := ioutil.WriteFile(tokenPath, data, 0600); err != nil {
+	if err := os.WriteFile(tokenPath, data, 0600); err != nil {
 		return fmt.Errorf("failed to write token file: %w", err)
 	}
 
@@ -92,7 +91,7 @@ func LoadToken() (*oauth2.Token, error) {
 		return nil, fmt.Errorf("token file not found at %s", tokenPath)
 	}
 
-	data, err := ioutil.ReadFile(tokenPath)
+	data, err := os.ReadFile(tokenPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read token file: %w", err)
 	}
